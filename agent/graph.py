@@ -1,30 +1,42 @@
 from langchain_groq import ChatGroq
-from pydantic import BaseModel,Field
+from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
-from prompt import *
+from prompt import planner_prompt
+from states import Plan, File
+from langgraph.graph import StateGraph,START,END
+from typing import Annotated, Sequence
+from typing import TypedDict
+from langchain_core.messages import BaseMessage,HumanMessage
+from langgraph.graph.message import add_messages
 
 load_dotenv()
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 llm=ChatGroq(model="openai/gpt-oss-120b")
 
-user_prompt="Create a calculator web application?"
-prompt=planner_prompt(user_prompt)
+
+class AgentState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
 
 
-class File(BaseModel):
-    path:str = Field(description="The path of the file to be created"),
-    purpose:str = Field(description="The purpose of the file to be created , e.g. 'main app logic' , 'data processing module' , etc")
+def planner_agent(state):
+    print("Messages in AgentState:", state["messages"])
+    user_prompt = state["messages"][-1].content  # last message text
+    resp = llm.with_structured_output(Plan).invoke(planner_prompt(user_prompt))
+    print("LLM Response:", resp)
+    return {"messages": [HumanMessage(content=str(resp))]}
 
 
-class Plan(BaseModel):
-    name: str = Field(description="The name of the app to be built")
-    description: str = Field(description="A oneline description of the app to be built")
-    tech_stack: str = Field(description="The technology stack to be used to build the app eg:python,javascript,react,flask,etc")
-    features: list[str] = Field(description="A list of features of that app should have e.g. 'user authentication,data visualization ,etc'")
-    files: list[File] = Field(description="A list of files that should be created in the app , each with a path and purpose")
-
-resp= llm.with_structured_output(Plan).invoke(prompt)
+graph = StateGraph(AgentState)
+graph.add_node("planner", planner_agent)
+graph.add_edge(START, "planner")
+graph.add_edge("planner", END)
+builder=graph.compile()
 
 
-print(resp)
+user_question = "Create a calculator web application?"
+input_state = {
+    "messages": [HumanMessage(content=user_question)]
+}
+
+builder.invoke(input_state)
